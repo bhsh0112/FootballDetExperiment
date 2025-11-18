@@ -3,21 +3,17 @@
 <p>
 <h2 align="center">YOLOv13: Real-Time Object Detection with Hypergraph-Enhanced Adaptive Visual Perception</h2>
 
-<p align="center">
-    <a href="https://arxiv.org/abs/2506.17733">
-    <img src="https://img.shields.io/badge/arXiv-Paper-b31b1b.svg" alt="arXiv">
-  </a>
-  <a href="https://github.com/iMoonLab">
-    <img src="https://img.shields.io/badge/iMoonLab-Homepage-blueviolet.svg" alt="iMoonLab">
-  </a>
-</p>
-
+[![arXiv](https://img.shields.io/badge/arXiv-Paper-b31b1b?logo=arxiv&logoColor=white)](https://arxiv.org/abs/2506.17733)
+[![iMoonLab](https://img.shields.io/badge/iMoonLab-Homepage-blueviolet?logo=github&logoColor=white)](https://github.com/iMoonLab)
+[![HyperAI Demo](https://img.shields.io/badge/HyperAI-Demo-red?logo=hyperledger&logoColor=white)](https://app.hyper.ai/console/public/tutorials/NIC3cpjlw7u)
   
 <div align="center">
     <img src="assets/framework.png">
 </div>
 
 ## Updates
+
+- 2025/11/18: [A Demo and Tutorial of YOLOv13](https://huggingface.co/spaces/atalaydenknalbant/Yolov13) is online. Thanks to [HyperAI](https://hyper.ai/cn)!
 
 - 2025/07/19: [HuggingFace Spaces Demo](https://huggingface.co/spaces/atalaydenknalbant/Yolov13) is online. Thanks to [Atalay](https://github.com/atalaydenknalbant)!
 
