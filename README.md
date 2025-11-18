@@ -13,7 +13,7 @@
 
 ## Updates
 
-- 2025/11/18: [A Demo and Tutorial of YOLOv13](https://huggingface.co/spaces/atalaydenknalbant/Yolov13) is online. Thanks to [HyperAI](https://hyper.ai/cn)!
+- 2025/11/18: [A Demo and Tutorial of YOLOv13](https://app.hyper.ai/console/public/tutorials/NIC3cpjlw7u) is online. Thanks to [HyperAI](https://hyper.ai/cn)!
 
 - 2025/07/19: [HuggingFace Spaces Demo](https://huggingface.co/spaces/atalaydenknalbant/Yolov13) is online. Thanks to [Atalay](https://github.com/atalaydenknalbant)!
 
