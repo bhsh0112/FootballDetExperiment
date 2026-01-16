@@ -1,0 +1,91 @@
+# scheme_a_heatmap_tracker - gitignore
+
+############################
+# Nested git dir (avoid committing accidentally)
+############################
+.git/
+
+############################
+# Python cache / artifacts
+############################
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+############################
+# Virtual envs
+############################
+.venv/
+venv/
+ENV/
+env/
+
+############################
+# Build / packaging
+############################
+build/
+dist/
+*.egg-info/
+.eggs/
+
+############################
+# IDE / editor
+############################
+.vscode/
+.idea/
+*.swp
+*.swo
+
+############################
+# Jupyter
+############################
+.ipynb_checkpoints/
+
+############################
+# Linters / type check / tests caches
+############################
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.cache/
+
+############################
+# OS junk
+############################
+.DS_Store
+Thumbs.db
+
+############################
+# Training / inference outputs (reproducible, usually large)
+############################
+runs/
+output/
+outputs/
+logs/
+
+# model checkpoints / exported models
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.engine
+*.trt
+
+# generated annotations / tracks
+*.csv
+
+# generated media
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
+
+
