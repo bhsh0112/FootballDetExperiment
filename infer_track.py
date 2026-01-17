@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 from collections import deque
 from pathlib import Path
 from typing import Deque, List, Optional, Tuple
@@ -25,15 +26,36 @@ import cv2
 import numpy as np
 import torch
 
-from .common import (
-    bgr_to_rgb_float,
-    heatmap_argmax_to_xy,
-    input_xy_to_orig_xy,
-    letterbox,
-    normalize_imagenet,
-)
-from .kalman import ConstantVelocityKalman
-from .models import EarlyFusionUNet
+"""
+兼容两种启动方式：
+- 推荐：在仓库根目录执行 `python -m scheme_a_heatmap_tracker.infer_track ...`
+- 兼容：在本文件所在目录执行 `python infer_track.py ...`
+"""
+
+if __package__ is None or __package__ == "":
+    # 直接运行脚本时，确保能找到顶层包 scheme_a_heatmap_tracker
+    _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    from scheme_a_heatmap_tracker.common import (
+        bgr_to_rgb_float,
+        heatmap_argmax_to_xy,
+        input_xy_to_orig_xy,
+        letterbox,
+        normalize_imagenet,
+    )
+    from scheme_a_heatmap_tracker.kalman import ConstantVelocityKalman
+    from scheme_a_heatmap_tracker.models import EarlyFusionUNet
+else:
+    from .common import (
+        bgr_to_rgb_float,
+        heatmap_argmax_to_xy,
+        input_xy_to_orig_xy,
+        letterbox,
+        normalize_imagenet,
+    )
+    from .kalman import ConstantVelocityKalman
+    from .models import EarlyFusionUNet
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +77,13 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--device", type=str, default="cuda", help="cuda/cpu")
     p.add_argument("--trail", type=int, default=60, help="轨迹尾巴长度（帧）")
+    p.add_argument("--draw_peak", action="store_true", help="绘制 heatmap 峰值点（即使低于阈值也绘制）")
+
+    # gif 输出（仅对“帧目录输入”生效）
+    p.add_argument("--make_gif", action="store_true", help="把输出帧合成为 GIF 动图（仅帧目录输入）")
+    p.add_argument("--gif_name", type=str, default="tracked.gif", help="GIF 文件名（输出到 out_dir）")
+    p.add_argument("--gif_fps", type=float, default=8.0, help="GIF 帧率（fps）")
+    p.add_argument("--gif_max_frames", type=int, default=0, help="GIF最多包含的帧数（0表示不限制）")
 
     # kalman 参数
     p.add_argument("--process_var", type=float, default=200.0, help="卡尔曼过程噪声强度")
@@ -114,6 +143,7 @@ def preprocess_frame(frame_bgr: np.ndarray, img_size: int) -> Tuple[np.ndarray, 
 def draw_track(
     frame_bgr: np.ndarray,
     meas_xy: Optional[Tuple[float, float]],
+    peak_xy: Optional[Tuple[float, float]],
     filt_xy: Tuple[float, float],
     used_meas: bool,
     trail: List[Tuple[float, float]],
@@ -123,6 +153,7 @@ def draw_track(
 
     @param {np.ndarray} frame_bgr - 原图
     @param {Optional[Tuple[float,float]]} meas_xy - 观测点（原图坐标）或 None
+    @param {Optional[Tuple[float,float]]} peak_xy - heatmap 峰值点（原图坐标），可能为 None
     @param {Tuple[float,float]} filt_xy - 滤波点（原图坐标）
     @param {bool} used_meas - 是否使用了观测
     @param {List[Tuple[float,float]]} trail - 轨迹点列表（原图坐标）
@@ -142,11 +173,65 @@ def draw_track(
     color = (0, 255, 0) if used_meas else (0, 0, 255)
     cv2.circle(out, (int(fx), int(fy)), 5, color, -1)
 
+    # 峰值点（蓝色空心圆）：用于诊断模型到底在“看哪里”
+    if peak_xy is not None:
+        px, py = peak_xy
+        cv2.circle(out, (int(px), int(py)), 6, (255, 0, 0), 2)
+
     if meas_xy is not None:
         mx, my = meas_xy
         cv2.circle(out, (int(mx), int(my)), 4, (255, 255, 255), 2)
 
     return out
+
+
+def make_gif_from_dir(frames_dir: str, gif_path: str, fps: float = 8.0, max_frames: int = 0) -> None:
+    """
+    将目录中的图片按文件名排序合成为 GIF。
+
+    注意：该函数会读取 frames_dir 目录下的图片（默认输出目录），用于把“已绘制轨迹”的帧做成动图。
+
+    @param {str} frames_dir - 图片目录
+    @param {str} gif_path - 输出 gif 路径
+    @param {float} fps - gif 帧率
+    @param {int} max_frames - 最多包含的帧数（0 表示不限制）
+    @returns {None}
+    """
+
+    try:
+        from PIL import Image  # type: ignore
+    except Exception as e:
+        raise RuntimeError("未安装 pillow，无法生成 GIF。请安装 pillow 后重试。") from e
+
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    imgs = sorted(
+        [p for p in Path(frames_dir).iterdir() if p.is_file() and p.suffix.lower() in exts],
+        key=lambda p: p.name,
+    )
+    if len(imgs) == 0:
+        raise FileNotFoundError(f"目录下没有可用图片，无法生成 GIF：{frames_dir}")
+
+    if int(max_frames) > 0:
+        imgs = imgs[: int(max_frames)]
+
+    duration_ms = int(round(1000.0 / max(float(fps), 1e-6)))
+    os.makedirs(os.path.dirname(gif_path) or ".", exist_ok=True)
+
+    frames: List["Image.Image"] = []
+    for p in imgs:
+        im = Image.open(str(p)).convert("RGB")
+        frames.append(im)
+
+    first = frames[0]
+    rest = frames[1:]
+    first.save(
+        gif_path,
+        save_all=True,
+        append_images=rest,
+        duration=duration_ms,
+        loop=0,
+        optimize=False,
+    )
 
 
 def run_on_video(args: argparse.Namespace) -> None:
@@ -188,6 +273,8 @@ def run_on_video(args: argparse.Namespace) -> None:
             [
                 "frame_idx",
                 "time_sec",
+                "peak_x",
+                "peak_y",
                 "meas_x",
                 "meas_y",
                 "meas_conf",
@@ -208,6 +295,7 @@ def run_on_video(args: argparse.Namespace) -> None:
             infos.append(info)
 
             meas_xy = None
+            peak_xy = None
             meas_conf = 0.0
             if len(q) == args.window:
                 x = np.concatenate(list(q), axis=0)[None, ...]  # (1,C,H,W)
@@ -218,19 +306,19 @@ def run_on_video(args: argparse.Namespace) -> None:
 
                 hx, hy, conf = heatmap_argmax_to_xy(hm)
                 meas_conf = float(conf)
+                # heatmap 坐标 -> 输入图坐标 -> 原图坐标（峰值点始终可算出来）
+                scale = float(args.img_size) / float(args.heatmap_size)
+                x_in = (hx + 0.5) * scale
+                y_in = (hy + 0.5) * scale
+                x0, y0 = input_xy_to_orig_xy(x_in, y_in, infos[-1])
+                peak_xy = (float(x0), float(y0))
                 if meas_conf >= float(args.conf_thresh):
-                    # heatmap 坐标 -> 输入图坐标
-                    scale = float(args.img_size) / float(args.heatmap_size)
-                    x_in = (hx + 0.5) * scale
-                    y_in = (hy + 0.5) * scale
-                    # 输入图坐标 -> 原图坐标（用最后一帧的 letterbox info）
-                    x0, y0 = input_xy_to_orig_xy(x_in, y_in, infos[-1])
-                    meas_xy = (float(x0), float(y0))
+                    meas_xy = peak_xy
 
             filt_x, filt_y, used = kf.step(meas_xy)
             trail.append((float(filt_x), float(filt_y)))
 
-            vis = draw_track(frame, meas_xy, (filt_x, filt_y), used, list(trail))
+            vis = draw_track(frame, meas_xy, peak_xy if bool(args.draw_peak) else None, (filt_x, filt_y), used, list(trail))
             writer.write(vis)
 
             t = frame_idx / max(fps, 1e-6)
@@ -238,6 +326,8 @@ def run_on_video(args: argparse.Namespace) -> None:
                 [
                     frame_idx,
                     f"{t:.6f}",
+                    "" if peak_xy is None else f"{peak_xy[0]:.3f}",
+                    "" if peak_xy is None else f"{peak_xy[1]:.3f}",
                     "" if meas_xy is None else f"{meas_xy[0]:.3f}",
                     "" if meas_xy is None else f"{meas_xy[1]:.3f}",
                     f"{meas_conf:.6f}",
@@ -293,6 +383,8 @@ def run_on_frames_dir(args: argparse.Namespace) -> None:
         writer_csv.writerow(
             [
                 "frame_name",
+                "peak_x",
+                "peak_y",
                 "meas_x",
                 "meas_y",
                 "meas_conf",
@@ -312,6 +404,7 @@ def run_on_frames_dir(args: argparse.Namespace) -> None:
             infos.append(info)
 
             meas_xy = None
+            peak_xy = None
             meas_conf = 0.0
             if len(q) == args.window:
                 x = np.concatenate(list(q), axis=0)[None, ...]
@@ -321,23 +414,26 @@ def run_on_frames_dir(args: argparse.Namespace) -> None:
                     hm = torch.sigmoid(out.heatmap_logits)[0, 0].detach().cpu().numpy().astype(np.float32)
                 hx, hy, conf = heatmap_argmax_to_xy(hm)
                 meas_conf = float(conf)
+                scale = float(args.img_size) / float(args.heatmap_size)
+                x_in = (hx + 0.5) * scale
+                y_in = (hy + 0.5) * scale
+                x0, y0 = input_xy_to_orig_xy(x_in, y_in, infos[-1])
+                peak_xy = (float(x0), float(y0))
                 if meas_conf >= float(args.conf_thresh):
-                    scale = float(args.img_size) / float(args.heatmap_size)
-                    x_in = (hx + 0.5) * scale
-                    y_in = (hy + 0.5) * scale
-                    x0, y0 = input_xy_to_orig_xy(x_in, y_in, infos[-1])
-                    meas_xy = (float(x0), float(y0))
+                    meas_xy = peak_xy
 
             filt_x, filt_y, used = kf.step(meas_xy)
             trail.append((float(filt_x), float(filt_y)))
 
-            vis = draw_track(frame, meas_xy, (filt_x, filt_y), used, list(trail))
+            vis = draw_track(frame, meas_xy, peak_xy if bool(args.draw_peak) else None, (filt_x, filt_y), used, list(trail))
             out_img = os.path.join(args.out_dir, fp.name)
             cv2.imwrite(out_img, vis)
 
             writer_csv.writerow(
                 [
                     fp.name,
+                    "" if peak_xy is None else f"{peak_xy[0]:.3f}",
+                    "" if peak_xy is None else f"{peak_xy[1]:.3f}",
                     "" if meas_xy is None else f"{meas_xy[0]:.3f}",
                     "" if meas_xy is None else f"{meas_xy[1]:.3f}",
                     f"{meas_conf:.6f}",
@@ -349,6 +445,14 @@ def run_on_frames_dir(args: argparse.Namespace) -> None:
 
             if (i + 1) % 200 == 0:
                 print(f"[{i+1}/{len(frames)}] processing...")
+
+    # 合成 GIF（可选）
+    if bool(getattr(args, "make_gif", False)):
+        gif_path = os.path.join(args.out_dir, str(getattr(args, "gif_name", "tracked.gif")))
+        fps = float(getattr(args, "gif_fps", 8.0))
+        max_frames = int(getattr(args, "gif_max_frames", 0))
+        make_gif_from_dir(args.out_dir, gif_path, fps=fps, max_frames=max_frames)
+        print(f"动图 GIF：{gif_path}")
 
     print(f"输出完成：{args.out_dir}")
     print(f"轨迹 CSV：{csv_path}")

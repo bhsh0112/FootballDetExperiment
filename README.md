@@ -59,6 +59,33 @@ conda run -n yolo python -m scheme_a_heatmap_tracker.train_from_data_yolo \
   --epochs 50
 ```
 
+## 显存不足（OOM）怎么解决
+
+如果你看到 `CUDA out of memory` 且 `nvidia-smi` 显示显存几乎被占满（例如只剩几百 MiB），通常是**别的进程占用显存**或 batch/模型过大。
+
+建议按优先级尝试：
+
+- **先清显存**：用 `nvidia-smi` 找到占用进程并结束，或重启 Python/终端会话。
+- **启用 AMP**（强烈推荐）：加 `--amp`
+- **减小 batch**：例如 `--batch_size 2`
+- **减小模型**：例如 `--base_ch 16`
+- **减小输入尺寸**：例如 `--img_size 320 --heatmap_size 80`
+
+一个更稳妥的低显存命令示例：
+
+```bash
+conda run -n yolo python -m scheme_a_heatmap_tracker.train_from_data_yolo \
+  --data_root /home/buaa/football_detect/data \
+  --out_dir /home/buaa/football_detect/runs/scheme_a/run1 \
+  --window 1 \
+  --img_size 320 \
+  --heatmap_size 80 \
+  --base_ch 16 \
+  --batch_size 2 \
+  --amp \
+  --epochs 50
+```
+
 ### A. 从视频抽帧
 
 ```bash
@@ -67,6 +94,24 @@ python -m scheme_a_heatmap_tracker.tools.extract_frames \
   --out_dir /abs/path/to/frames_dir \
   --every 1
 ```
+
+## 半自动标注（给 keyframes / 视频抽帧做域内微调）
+
+当 `data/` 训练出来的模型在你的机位/分辨率上不工作（域差异大）时，最有效的方式是：
+对你自己的视频抽帧做少量“球心点”标注（例如 200~1000 帧），再用 `train.py` 或 `train_from_data_yolo.py` 做微调。
+
+标注工具（OpenCV GUI）：
+
+```bash
+conda run -n yolo python -m scheme_a_heatmap_tracker.tools.annotate_points \
+  --input /abs/frames_dir \
+  --out_csv /abs/points.csv \
+  --autosave
+```
+
+提示：
+- 鼠标左键点击设置球心点
+- `n/Space` 下一帧，`p` 上一帧，`v` 标记不可见，`s` 保存
 
 ### B. 从 YOLO 标签转换为“球心点 CSV”（复用现有 train/valid/test）
 

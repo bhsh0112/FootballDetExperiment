@@ -127,7 +127,7 @@ class EarlyFusionUNet(nn.Module):
     ) -> None:
         """
         @param {int} window - 多帧窗口长度
-        @param {int} base_ch - UNet 基础通道数
+        @param {int} base_ch - UNet 基础通道数（越小越省显存，推荐 16/24/32）
         @param {Tuple[int,int]} out_size - 输出 heatmap 的 (H,W)
         """
 

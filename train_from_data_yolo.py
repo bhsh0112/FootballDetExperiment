@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from typing import Optional
 
 import numpy as np  # type: ignore
@@ -22,9 +23,24 @@ import torch.nn.functional as F  # type: ignore
 from torch.utils.data import DataLoader  # type: ignore
 from tqdm import tqdm  # type: ignore
 
-from .datasets import SequencePointDataset
-from .models import EarlyFusionUNet
-from .tools.yolo_to_points import list_images, pick_ball_center, read_yolo_label
+"""
+兼容两种启动方式：
+- 推荐：在仓库根目录执行 `python -m scheme_a_heatmap_tracker.train_from_data_yolo ...`
+- 兼容：在本文件所在目录执行 `python train_from_data_yolo.py ...`
+"""
+
+if __package__ is None or __package__ == "":
+    # 直接运行脚本时，确保能找到顶层包 scheme_a_heatmap_tracker
+    _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    from scheme_a_heatmap_tracker.datasets import SequencePointDataset
+    from scheme_a_heatmap_tracker.models import EarlyFusionUNet
+    from scheme_a_heatmap_tracker.tools.yolo_to_points import list_images, pick_ball_center, read_yolo_label
+else:
+    from .datasets import SequencePointDataset
+    from .models import EarlyFusionUNet
+    from .tools.yolo_to_points import list_images, pick_ball_center, read_yolo_label
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,14 +67,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--window", type=int, default=1, help="多帧窗口长度（此数据通常非连续，建议 1）")
     p.add_argument("--img_size", type=int, default=640, help="网络输入尺寸（正方形）")
     p.add_argument("--heatmap_size", type=int, default=160, help="heatmap 尺寸（正方形）")
+    p.add_argument("--base_ch", type=int, default=32, help="UNet 基础通道数（越小越省显存：16/24/32）")
     p.add_argument("--sigma", type=float, default=2.0, help="heatmap 高斯 sigma（heatmap 像素）")
     p.add_argument("--lambda_no_ball", type=float, default=0.05, help="不可见帧 loss 权重")
 
     p.add_argument("--epochs", type=int, default=50, help="训练轮数")
     p.add_argument("--batch_size", type=int, default=16, help="batch size（单帧训练可适当调大）")
+    p.add_argument("--grad_accum", type=int, default=1, help="梯度累积步数（=1表示不累积）")
     p.add_argument("--lr", type=float, default=1e-3, help="学习率")
     p.add_argument("--weight_decay", type=float, default=1e-4, help="weight decay")
     p.add_argument("--device", type=str, default="cuda", help="cuda/cpu")
+    p.add_argument("--amp", action="store_true", help="启用 AMP 混合精度（显存更省，推荐）")
     p.add_argument("--num_workers", type=int, default=2, help="DataLoader workers")
     return p.parse_args()
 
@@ -198,8 +217,14 @@ def main() -> None:
     )
 
     device = torch.device(args.device if (args.device == "cpu" or torch.cuda.is_available()) else "cpu")
-    model = EarlyFusionUNet(window=args.window, base_ch=32, out_size=(args.heatmap_size, args.heatmap_size)).to(device)
+    model = EarlyFusionUNet(
+        window=args.window,
+        base_ch=int(args.base_ch),
+        out_size=(args.heatmap_size, args.heatmap_size),
+    ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    use_amp = bool(args.amp) and device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     best_val = float("inf")
     meta = {
@@ -209,24 +234,34 @@ def main() -> None:
         "window": int(args.window),
         "img_size": int(args.img_size),
         "heatmap_size": int(args.heatmap_size),
+        "base_ch": int(args.base_ch),
         "sigma": float(args.sigma),
         "lambda_no_ball": float(args.lambda_no_ball),
+        "amp": bool(args.amp),
+        "grad_accum": int(args.grad_accum),
     }
 
     for epoch in range(1, int(args.epochs) + 1):
         model.train()
         tr_losses = []
+        opt.zero_grad(set_to_none=True)
         for batch in tqdm(train_loader, desc=f"train {epoch}/{args.epochs}"):
             x = batch["x"].to(device, non_blocking=True)
             y = batch["y"].to(device, non_blocking=True)
             lw = batch["loss_w"].to(device, non_blocking=True)
-            out = model(x)
-            loss = heatmap_loss(out.heatmap_logits, y, lw)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            opt.step()
-            tr_losses.append(float(loss.item()))
+            accum = max(1, int(args.grad_accum))
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                out = model(x)
+                loss = heatmap_loss(out.heatmap_logits, y, lw) / float(accum)
+            scaler.scale(loss).backward()
+            tr_losses.append(float(loss.item() * float(accum)))
+
+            if (len(tr_losses) % accum) == 0:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                scaler.step(opt)
+                scaler.update()
+                opt.zero_grad(set_to_none=True)
 
         model.eval()
         v_losses = []
@@ -235,8 +270,9 @@ def main() -> None:
                 x = batch["x"].to(device, non_blocking=True)
                 y = batch["y"].to(device, non_blocking=True)
                 lw = batch["loss_w"].to(device, non_blocking=True)
-                out = model(x)
-                loss = heatmap_loss(out.heatmap_logits, y, lw)
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    out = model(x)
+                    loss = heatmap_loss(out.heatmap_logits, y, lw)
                 v_losses.append(float(loss.item()))
 
         tr = float(np.mean(tr_losses)) if tr_losses else 0.0
