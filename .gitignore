@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environments
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Datasets & media (large files)
+data/
+tracknetv4_data/
+test_game/
+keyframes/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.m4v
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.gif
+
+# Model weights / archives
+weights/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+*.zip
+
+# Experiment outputs
+output/
+runs/
+runs_1/
+experiments/**/output/
+experiments/**/output_*/
+experiments/**/runs/
+experiments/**/runs_*/
+experiments/**/output*
+
+# Temp / cache
+**/.cache/
+*.tmp
+*.bak
+
